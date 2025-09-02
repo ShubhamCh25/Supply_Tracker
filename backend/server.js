@@ -1,25 +1,20 @@
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const { create } = require('ipfs-http-client');
 const { ethers } = require('ethers');
 
 const app = express();
 const port = 3001;
 
-// IPFS client setup
-const ipfs = create({
-    host: 'ipfs.infura.io',
-    port: 5001,
-    protocol: 'https',
-    headers: {
-      
-    }
+// IPFS setup - Using NFT.Storage (no problematic imports)
+const { NFTStorage, File } = require('nft.storage');
+const nftStorage = new NFTStorage({ 
+    token: process.env.NFT_STORAGE_API_KEY || '' 
 });
 
-// Alternative: Use nft.storage (uncomment if preferred)
-// const { NFTStorage, File } = require('nft.storage');
-// const nftStorage = new NFTStorage({ token: 'YOUR_NFT_STORAGE_API_KEY' });
+// Mock IPFS for development (set to false when you have real credentials)
+const MOCK_IPFS = false;
 
 // Middleware
 app.use(cors());
@@ -30,16 +25,15 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Blockchain setup
 const provider = new ethers.providers.JsonRpcProvider('http://127.0.0.1:8545'); // Ganache
-const privateKey = '0xdecd09d82d8aa29657642cb7cb884c91278412c7950eae6a4f79686d2bb30018'; // Replace with actual key
+const privateKey = process.env.GANACHE_PRIVATE_KEY || '0xdecd09d82d8aa29657642cb7cb884c91278412c7950eae6a4f79686d2bb30018'; // Get from Ganache GUI
 const signer = new ethers.Wallet(privateKey, provider);
 
-// Contract addresses (will be updated after deployment)
+// Contract addresses (update these after deployment)
 const contractAddresses = {
-    ProductNFT: '0x3e964A10Ce73c29E1000D3Ab4fB261446Ab432f5', // Update after deployment
-    ProductRegistry: '0xfcA57977932E7d43088cE5EC5d61cc7279d232b9', // Update after deployment
-    Tracking: '0x5199f5D38e891aEff741e618dcbc50d4B737587B' // Update after deployment
+    ProductNFT: process.env.PRODUCT_NFT_ADDRESS || '0x9069341477CD0267e035984DD487b420463Bb527',
+    ProductRegistry: process.env.PRODUCT_REGISTRY_ADDRESS || '0x3A2B491B2130ce45943af88F47F4f79E0be7e5FA', 
+    Tracking: process.env.TRACKING_ADDRESS || '0x12A8B237f62c175BC397DEE5C34437Ee4ab24831'
 };
-
 // Contract ABIs (simplified for demo)
 const trackingABI = [
     "function addCheckpoint(uint256 tokenId, string memory step, string memory location) public",
@@ -58,9 +52,19 @@ app.post('/upload-image', upload.single('image'), async (req, res) => {
             return res.status(400).json({ error: 'No image file provided' });
         }
 
-        // Upload to IPFS
-        const result = await ipfs.add(req.file.buffer);
-        const imageCID = result.path;
+        let imageCID;
+
+        if (MOCK_IPFS) {
+            // Mock IPFS for development
+            imageCID = 'QmMockImage' + Date.now() + Math.random().toString(36).substr(2, 9);
+            console.log('Mock IPFS upload - Image CID:', imageCID);
+        } else {
+            // Real NFT.Storage upload
+            const file = new File([req.file.buffer], req.file.originalname, {
+                type: req.file.mimetype
+            });
+            imageCID = await nftStorage.storeBlob(file);
+        }
 
         res.json({ imageCID });
     } catch (error) {
@@ -90,9 +94,19 @@ app.post('/upload-metadata', async (req, res) => {
             ]
         };
 
-        const metadataBuffer = Buffer.from(JSON.stringify(metadata));
-        const result = await ipfs.add(metadataBuffer);
-        const metadataCID = result.path;
+        let metadataCID;
+
+        if (MOCK_IPFS) {
+            // Mock metadata upload
+            metadataCID = 'QmMockMetadata' + Date.now() + Math.random().toString(36).substr(2, 9);
+            console.log('Mock metadata upload - CID:', metadataCID);
+        } else {
+            // Real NFT.Storage upload
+            const file = new File([JSON.stringify(metadata)], 'metadata.json', {
+                type: 'application/json'
+            });
+            metadataCID = await nftStorage.storeBlob(file);
+        }
 
         res.json({ metadataCID, metadata });
     } catch (error) {
@@ -106,13 +120,24 @@ app.get('/fetch-metadata/:cid', async (req, res) => {
     try {
         const { cid } = req.params;
         
-        const chunks = [];
-        for await (const chunk of ipfs.cat(cid)) {
-            chunks.push(chunk);
+        if (MOCK_IPFS) {
+            // Return mock metadata
+            const mockMetadata = {
+                name: `Product ${cid.slice(-4)}`,
+                description: 'Mock product for testing',
+                image: 'https://via.placeholder.com/300x300?text=Product+Image',
+                attributes: [
+                    { trait_type: "Manufacturing Location", value: "Demo Location" },
+                    { trait_type: "Created At", value: new Date().toISOString() }
+                ]
+            };
+            res.json(mockMetadata);
+        } else {
+            // Real IPFS fetch would go here
+            // const response = await fetch(`https://ipfs.io/ipfs/${cid}`);
+            // const metadata = await response.json();
+            res.json({ error: 'Real IPFS fetch not implemented yet' });
         }
-        
-        const metadata = JSON.parse(Buffer.concat(chunks).toString());
-        res.json(metadata);
     } catch (error) {
         console.error('Error fetching metadata:', error);
         res.status(500).json({ error: 'Failed to fetch metadata' });
