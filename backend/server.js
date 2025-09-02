@@ -13,7 +13,7 @@ const ipfs = create({
     port: 5001,
     protocol: 'https',
     headers: {
-        authorization: 'Basic ' + Buffer.from('BNK7eaRfkaYYkA8zcm9f2VWCxTLeT0miSBYLaY9W6Fqvv504JcZbyTCsxIkB78bxJd3tPORp_DOacA1Qle2PWLw:977592711d8bd7859f1083d0de2ffaf3a347736077b1db7f7b7b5420cf064d73 ').toString('base64')
+      
     }
 });
 
