@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-// ✅ IMPORT 'pinata' and update 'uploadToPinata' from Constants
 import { ConnectionStatus, uploadToPinata, pinata, PINATA_GATEWAY } from './Constants'; 
 import { QRCodeCanvas } from "qrcode.react";
 
 // === Helper: Upload updated metadata with new PDF CID ===
 async function uploadUpdatedMetadata(oldMetadataUrl, newPdfCid) {
+  
+  // === PERFORMANCE CHECK START: Metadata Fetch for Update ===
+  const startMetadataFetch = performance.now();
+  
   // Use a reliable gateway for fetching old metadata
   const metadataRes = await fetch(oldMetadataUrl);
   if (!metadataRes.ok) throw new Error(`Failed to fetch metadata: ${metadataRes.statusText}`);
   const oldMetadata = await metadataRes.json();
+  
+  const endMetadataFetch = performance.now();
+  console.log(`[PERF] Old Metadata Fetch Time (Customer): ${(endMetadataFetch - startMetadataFetch).toFixed(2)} ms`);
 
   const updatedMetadata = {
     ...oldMetadata,
@@ -25,8 +31,15 @@ async function uploadUpdatedMetadata(oldMetadataUrl, newPdfCid) {
   const metadataBlob = new Blob([JSON.stringify(updatedMetadata)], { type: "application/json" });
 
   // ✅ Use the imported 'pinata' object
+  // === PERFORMANCE CHECK START: Updated Metadata Upload ===
+  const startMetadataUpload = performance.now();
+  
   const upload = await pinata.upload.public.file(metadataBlob);
   const newMetadataCid = upload.cid;
+
+  const endMetadataUpload = performance.now();
+  console.log(`[PERF] Updated Metadata Upload Time (Customer): ${(endMetadataUpload - startMetadataUpload).toFixed(2)} ms (New CID: ${newMetadataCid})`);
+
   return newMetadataCid;
 }
 
@@ -49,12 +62,17 @@ const CustomerDashboard = ({
 
     try {
       setLoading(true);
+      // === PERFORMANCE CHECK START: Total Customer Data Load ===
+      const startTime = performance.now();
       
       // Fetch available and owned token IDs concurrently
+      const startFetchIds = performance.now();
       const [availableTokenIds, ownedTokenIds] = await Promise.all([
           contracts.productRegistry.getAvailableProducts(),
           contracts.productRegistry.getProductsByOwner(account)
       ]);
+      const endFetchIds = performance.now();
+      console.log(`[PERF] Customer Fetch Token IDs Time: ${(endFetchIds - startFetchIds).toFixed(2)} ms (${availableTokenIds.length + ownedTokenIds.length} total tokens)`);
       
       const tokensToLoad = Array.from(new Set([...availableTokenIds, ...ownedTokenIds]));
       if (tokensToLoad.length === 0) {
@@ -76,7 +94,14 @@ const CustomerDashboard = ({
           ]);
           
           const metadataUrl = `${baseGatewayUrl}${metadataCID.replace("ipfs://", "")}`;
+          
+          // === PERFORMANCE CHECK START: Metadata HTTP Fetch (Customer List) ===
+          const startMetadataFetch = performance.now();
           const metadata = await fetch(metadataUrl).then((res) => res.json());
+          const endMetadataFetch = performance.now();
+          console.log(`[PERF] Customer List Metadata HTTP Fetch for ID ${tokenId}: ${(endMetadataFetch - startMetadataFetch).toFixed(2)} ms`);
+
+
           const docAttr = metadata.attributes?.find(a => a.trait_type === "Documentation");
           const pdfUrl = docAttr ? `${baseGatewayUrl}${docAttr.value.replace("ipfs://", "")}` : null;
 
@@ -115,6 +140,10 @@ const CustomerDashboard = ({
       setProducts(loadedProducts.filter(p => p.available && p.owner.toLowerCase() !== account.toLowerCase()));
       setOwnedProducts(loadedProducts.filter(p => p.owner.toLowerCase() === account.toLowerCase()));
 
+      // === PERFORMANCE CHECK END: Total Customer Data Load ===
+      const endTime = performance.now();
+      console.log(`[PERF] TOTAL CUSTOMER DATA LOAD TIME: ${(endTime - startTime).toFixed(2)} ms`);
+
     } catch (error) {
       alert(`Failed to load customer data: ${error.message}`);
     }
@@ -126,10 +155,18 @@ const CustomerDashboard = ({
 
   // === Append product journey to existing PDF ===
   async function appendJourneyToPDF(existingPdfUrl, ownershipDetails) {
+    // === PERFORMANCE CHECK START: PDF Append Process ===
+    const startPdfAppend = performance.now();
+    
+    // 1. Fetch PDF
+    const startPdfFetch = performance.now();
     const response = await fetch(existingPdfUrl);
     if (!response.ok) throw new Error(`Failed to fetch existing PDF: ${response.statusText}`);
     const pdfBytes = await response.arrayBuffer();
     const pdfDoc = await PDFDocument.load(pdfBytes);
+    const endPdfFetch = performance.now();
+    console.log(`[PERF] Existing PDF Fetch Time: ${(endPdfFetch - startPdfFetch).toFixed(2)} ms`);
+
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const page = pdfDoc.addPage([600, 800]);
     let y = 760;
@@ -157,8 +194,16 @@ const CustomerDashboard = ({
     const newPdfBytes = await pdfDoc.save();
     const updatedPdfFile = new File([newPdfBytes], `Updated_${Date.now()}.pdf`, { type: "application/pdf" });
 
-    // Upload new PDF using the imported 'uploadToPinata' function
+    // 2. Upload new PDF
+    const startPdfUpload = performance.now();
     const upload = await uploadToPinata(updatedPdfFile);
+    const endPdfUpload = performance.now();
+    console.log(`[PERF] Updated PDF Upload Time: ${(endPdfUpload - startPdfUpload).toFixed(2)} ms (New CID: ${upload.cid})`);
+
+    // === PERFORMANCE CHECK END: PDF Append Process ===
+    const endPdfAppend = performance.now();
+    console.log(`[PERF] TOTAL PDF APPEND & UPLOAD TIME: ${(endPdfAppend - startPdfAppend).toFixed(2)} ms`);
+    
     return upload.url;
   }
 
@@ -175,6 +220,9 @@ const CustomerDashboard = ({
     }
 
     setLoading(true);
+    // === PERFORMANCE CHECK START: Total Purchase Process ===
+    const startTime = performance.now();
+
     const purchasedProduct = products.find(p => p.tokenId === tokenId);
     const originalSellerAddress = purchasedProduct?.owner;
 
@@ -193,8 +241,13 @@ const CustomerDashboard = ({
       }
 
       // 1️⃣ Transfer ownership
+      // === PERFORMANCE CHECK START: Buy Transaction (On-chain) ===
+      const startBuyTx = performance.now();
       const buyTx = await contracts.productRegistry.buyProduct(tokenId);
-      await buyTx.wait();
+      const receipt = await buyTx.wait();
+      const endBuyTx = performance.now();
+      console.log(`[PERF] Buy Transaction Time (On-chain): ${(endBuyTx - startBuyTx).toFixed(2)} ms (Gas Used: ${receipt.gasUsed.toString()})`);
+
 
       // 2️⃣ Build journey data
       const journey = [
@@ -213,20 +266,22 @@ const CustomerDashboard = ({
         journey,
       };
 
-      // 3️⃣ Update PDF on Pinata
+      // 3️⃣ Update PDF on Pinata (Performance tracked inside helper)
       const newPdfUrl = await appendJourneyToPDF(purchasedProduct.pdf, ownershipDetails);
-      // The uploadToPinata helper returns the full URL, which needs to be parsed for the CID
       const newPdfCid = new URL(newPdfUrl).pathname.split("/").pop(); 
 
-      // 4️⃣ Update metadata JSON
+      // 4️⃣ Update metadata JSON (Performance tracked inside helper)
       const oldMetadataUrl = purchasedProduct.metadataURI;
       const newMetadataCid = await uploadUpdatedMetadata(oldMetadataUrl, newPdfCid);
 
       // 5️⃣ Update NFT metadata on-chain
-      // The updateTokenURI function expects the CID prepended with "ipfs://"
+      // === PERFORMANCE CHECK START: Update Token URI Transaction (On-chain) ===
+      const startUpdateUriTx = performance.now();
       const newMetadataURI = `ipfs://${newMetadataCid}`;
       const updateTx = await contracts.productNFT.updateTokenURI(tokenId, newMetadataURI);
-      await updateTx.wait();
+      const updateReceipt = await updateTx.wait();
+      const endUpdateUriTx = performance.now();
+      console.log(`[PERF] Update Token URI Transaction Time (On-chain): ${(endUpdateUriTx - startUpdateUriTx).toFixed(2)} ms (Gas Used: ${updateReceipt.gasUsed.toString()})`);
 
       // 6️⃣ Update UI
       setOwnedProducts(prev => [
@@ -243,6 +298,9 @@ const CustomerDashboard = ({
     }
 
     setLoading(false);
+    // === PERFORMANCE CHECK END: Total Purchase Process ===
+    const endTime = performance.now();
+    console.log(`[PERF] TOTAL PURCHASE PROCESS TIME: ${(endTime - startTime).toFixed(2)} ms`);
   };
 
   // === UI ===

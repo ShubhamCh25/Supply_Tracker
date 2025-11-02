@@ -5,7 +5,6 @@ import {
   uploadToPinata, 
   uploadMetadatatoPinata, 
   ConnectionStatus,
-  // ✅ FIX 1: Explicitly import PINATA_GATEWAY here
   PINATA_GATEWAY 
 } from './Constants'; 
 
@@ -38,6 +37,9 @@ const categoryFields = {
 
 // === PDF GENERATOR ===
 async function generatePDF(baseFile, extraData) {
+  // === PERFORMANCE CHECK START: PDF Generation ===
+  const startPdfGen = performance.now(); 
+  
   const existingPdfBytes = await baseFile.arrayBuffer();
   const pdfDoc = await PDFDocument.load(existingPdfBytes);
   const page = pdfDoc.addPage([600, 800]);
@@ -53,7 +55,14 @@ async function generatePDF(baseFile, extraData) {
   });
 
   const pdfBytes = await pdfDoc.save();
-  return new File([pdfBytes], `Product_${Date.now()}.pdf`, { type: 'application/pdf' });
+  const file = new File([pdfBytes], `Product_${Date.now()}.pdf`, { type: 'application/pdf' });
+
+  // === PERFORMANCE CHECK END: PDF Generation ===
+  const endPdfGen = performance.now();
+  // Log the time taken for PDF generation
+  console.log(`[PERF] PDF Generation Time: ${(endPdfGen - startPdfGen).toFixed(2)} ms`);
+  
+  return file;
 }
 
 const ManufacturerDashboard = ({ 
@@ -102,14 +111,26 @@ const ManufacturerDashboard = ({
 
     setIsCreating(true);
 
-    try {
-      const imageUpload = await uploadToPinata(productForm.image);
+    // === PERFORMANCE CHECK START: Total Submission ===
+    const startTime = performance.now();
 
+    try {
+      // === PERFORMANCE CHECK START: Image Upload ===
+      const startImageUpload = performance.now();
+      const imageUpload = await uploadToPinata(productForm.image);
+      const endImageUpload = performance.now();
+      console.log(`[PERF] Image Upload Time: ${(endImageUpload - startImageUpload).toFixed(2)} ms (CID: ${imageUpload.cid})`);
+      
       // 🧩 Add dynamic fields into the PDF before upload
       let pdfUpload = null;
       if (productForm.pdf) {
         const enrichedPDF = await generatePDF(productForm.pdf, { category, ...extraData });
+        
+        // === PERFORMANCE CHECK START: PDF Upload ===
+        const startPdfUpload = performance.now();
         pdfUpload = await uploadToPinata(enrichedPDF);
+        const endPdfUpload = performance.now();
+        console.log(`[PERF] PDF Upload Time: ${(endPdfUpload - startPdfUpload).toFixed(2)} ms (CID: ${pdfUpload.cid})`);
       }
 
       // === Build metadata JSON ===
@@ -129,14 +150,27 @@ const ManufacturerDashboard = ({
           ...(pdfUpload ? [{ trait_type: "Documentation", value: `ipfs://${pdfUpload.cid}` }] : [])
         ]
       };
-
+      
+      // === PERFORMANCE CHECK START: Metadata Upload ===
+      const startMetadataUpload = performance.now();
       const metadataUpload = await uploadMetadatatoPinata(metadata);
-     // Mint the product NFT
+      const endMetadataUpload = performance.now();
+      console.log(`[PERF] Metadata Upload Time: ${(endMetadataUpload - startMetadataUpload).toFixed(2)} ms (CID: ${metadataUpload.cid})`);
+     
+      // Mint the product NFT
+      // === PERFORMANCE CHECK START: Mint Transaction (On-chain) ===
+      const startMintTx = performance.now();
       const mintTx = await contracts.productNFT.mintProduct(metadataUpload.cid);
       const mintReceipt = await mintTx.wait();
+      const endMintTx = performance.now();
+      console.log(`[PERF] Mint Transaction Time (On-chain): ${(endMintTx - startMintTx).toFixed(2)} ms (Gas Used: ${mintReceipt.gasUsed.toString()})`);
 
       // Grant approval to the ProductRegistry contract to handle transfers
+      const startApprovalTx = performance.now();
       await contracts.productNFT.setApprovalForAll(contracts.productRegistry.target, true);
+      const endApprovalTx = performance.now();
+      console.log(`[PERF] Approval Transaction Time: ${(endApprovalTx - startApprovalTx).toFixed(2)} ms`);
+
 
       // Continue as before
       let tokenId;
@@ -158,8 +192,14 @@ const ManufacturerDashboard = ({
       }
 
       if (!tokenId) throw new Error("ProductMinted event not found.");
+      
+      // === PERFORMANCE CHECK START: Register Transaction (On-chain) ===
+      const startRegisterTx = performance.now();
       const registerTx = await contracts.productRegistry.registerProduct(tokenId);
       await registerTx.wait();
+      const endRegisterTx = performance.now();
+      console.log(`[PERF] Register Transaction Time (On-chain): ${(endRegisterTx - startRegisterTx).toFixed(2)} ms`);
+
 
       const newProduct = {
         tokenId,
@@ -186,6 +226,9 @@ const ManufacturerDashboard = ({
     }
 
     setIsCreating(false);
+    // === PERFORMANCE CHECK END: Total Submission ===
+    const endTime = performance.now();
+    console.log(`[PERF] TOTAL CREATE PRODUCT TIME: ${(endTime - startTime).toFixed(2)} ms`);
   };
 
   // === LOAD PRODUCTS ===
@@ -196,20 +239,29 @@ const ManufacturerDashboard = ({
     }
 
     setIsLoadingProducts(true);
+    // === PERFORMANCE CHECK START: Total Load Products ===
+    const startTime = performance.now();
 
     try {
+      // === PERFORMANCE CHECK START: Fetch Token IDs ===
+      const startFetchIds = performance.now();
       const tokenIds = await contracts.productRegistry.getAvailableProducts();
+      const endFetchIds = performance.now();
+      console.log(`[PERF] Fetch Token IDs Time: ${(endFetchIds - startFetchIds).toFixed(2)} ms (${tokenIds.length} tokens)`);
+
       if (tokenIds.length === 0) {
         setProducts([]);
         setIsLoadingProducts(false);
         return;
       }
 
-      // ✅ FIX 2: Use the imported PINATA_GATEWAY here
       const baseGatewayUrl = `https://${PINATA_GATEWAY}/ipfs/`;
 
       const productPromises = tokenIds.map(async (tokenId) => {
         try {
+          // === PERFORMANCE CHECK START: Single Product Details Fetch ===
+          const startSingleFetch = performance.now();
+
           const [metadataCID, productData, owner] = await Promise.all([
             contracts.productNFT.tokenURI(tokenId),
             contracts.productRegistry.getProduct(tokenId),
@@ -218,10 +270,19 @@ const ManufacturerDashboard = ({
           
           // Use the dynamic baseGatewayUrl for fetching metadata and image/pdf links
           const metadataUrl = `${baseGatewayUrl}${metadataCID.replace("ipfs://", "")}`;
+          // === PERFORMANCE CHECK START: Metadata HTTP Fetch ===
+          const startMetadataFetch = performance.now();
           const metadata = await fetch(metadataUrl).then((res) => res.json());
+          const endMetadataFetch = performance.now();
+          console.log(`[PERF] Metadata HTTP Fetch Time for ID ${tokenId}: ${(endMetadataFetch - startMetadataFetch).toFixed(2)} ms`);
+
 
           const docAttr = metadata.attributes?.find(a => a.trait_type === "Documentation");
           const pdfUrl = docAttr ? `${baseGatewayUrl}${docAttr.value.replace("ipfs://", "")}` : null;
+
+          // === PERFORMANCE CHECK END: Single Product Details Fetch ===
+          const endSingleFetch = performance.now();
+          console.log(`[PERF] Total Data Load Time for ID ${tokenId}: ${(endSingleFetch - startSingleFetch).toFixed(2)} ms`);
 
           return {
             tokenId: tokenId.toString(),
@@ -256,6 +317,9 @@ const ManufacturerDashboard = ({
     }
 
     setIsLoadingProducts(false);
+    // === PERFORMANCE CHECK END: Total Load Products ===
+    const endTime = performance.now();
+    console.log(`[PERF] TOTAL LOAD PRODUCTS TIME: ${(endTime - startTime).toFixed(2)} ms`);
   };
 
   // === REMOVE PRODUCT ===
@@ -272,10 +336,12 @@ const ManufacturerDashboard = ({
     }
 
     setIsCreating(true);
+    // === PERFORMANCE CHECK START: Remove Product Transaction ===
+    const startRemoveTx = performance.now();
 
     try {
       const removeTx = await contracts.productRegistry.removeProduct(tokenId);
-      await removeTx.wait();
+      const receipt = await removeTx.wait();
 
       setProducts((prev) =>
         prev.map((product) =>
@@ -284,6 +350,9 @@ const ManufacturerDashboard = ({
       );
 
       alert('Product removed successfully!');
+      // === PERFORMANCE CHECK END: Remove Product Transaction ===
+      const endRemoveTx = performance.now();
+      console.log(`[PERF] Remove Product Transaction Time: ${(endRemoveTx - startRemoveTx).toFixed(2)} ms (Gas Used: ${receipt.gasUsed.toString()})`);
     } catch (error) {
       console.error('Error removing product:', error);
       alert(`Failed to remove product: ${error.message}`);

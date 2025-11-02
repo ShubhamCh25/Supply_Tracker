@@ -1,4 +1,4 @@
-node_modules
+frontend/node_modules/
 .env
 
 /cache
@@ -16,3 +16,4 @@ ignition/deployments/chain-31337
 backend/
 
 frontend/.env
+node_modules
